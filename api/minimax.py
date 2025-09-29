@@ -256,7 +256,7 @@ def _multiplayer_minimax(state: GameState, depth: int, agent_index: int, alpha: 
         return min_score
 
 
-def find_best_move(state: GameState, depth: int = 7) -> str:
+def find_best_move(state: GameState, depth: int = 5) -> str:
     """Finds the best move using the appropriate MiniMax algorithm based on game mode."""
     # the cache is only valid for the duration of a single turn's calculation
     global _flood_fill_cache
@@ -295,6 +295,7 @@ def find_best_move(state: GameState, depth: int = 7) -> str:
             best_move = move['name']
 
     return best_move
+
 
 
 
