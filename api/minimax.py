@@ -1,6 +1,5 @@
 import collections
-import copy
-from .battlesnake_utils import GameState, Coord, Snake, manhattan_distance
+from .battlesnake_utils import GameState, Coord, manhattan_distance
 
 """
 Flood-Fill Caching
@@ -33,17 +32,14 @@ def _available_space(state: GameState, start_coord: Coord) -> int:
         coord = queue.popleft()
         count += 1
         for move in ["up", "down", "left", "right"]:
-            next_coord_data = {}
             if move == "up":
-                next_coord_data = {'x': coord.x, 'y': coord.y + 1}
+                next_coord = Coord({'x': coord.x, 'y': coord.y + 1})
             elif move == "down":
-                next_coord_data = {'x': coord.x, 'y': coord.y - 1}
+                next_coord = Coord({'x': coord.x, 'y': coord.y - 1})
             elif move == "left":
-                next_coord_data = {'x': coord.x - 1, 'y': coord.y}
-            elif move == "right":
-                next_coord_data = {'x': coord.x + 1, 'y': coord.y}
-
-            next_coord = Coord(next_coord_data)
+                next_coord = Coord({'x': coord.x - 1, 'y': coord.y})
+            else: # right
+                next_coord = Coord({'x': coord.x + 1, 'y': coord.y})
 
             # check safety against the current state's obstacles
             if state.is_safe(next_coord) and next_coord not in visited:
@@ -76,17 +72,14 @@ def _find_path_to_tail(state: GameState) -> bool:
             return True # path found
 
         for move in ["up", "down", "left", "right"]:
-            next_coord_data = {}
             if move == "up":
-                next_coord_data = {'x': coord.x, 'y': coord.y + 1}
+                next_coord = Coord({'x': coord.x, 'y': coord.y + 1})
             elif move == "down":
-                next_coord_data = {'x': coord.x, 'y': coord.y - 1}
+                next_coord = Coord({'x': coord.x, 'y': coord.y - 1})
             elif move == "left":
-                next_coord_data = {'x': coord.x - 1, 'y': coord.y}
-            elif move == "right":
-                next_coord_data = {'x': coord.x + 1, 'y': coord.y}
-
-            next_coord = Coord(next_coord_data)
+                next_coord = Coord({'x': coord.x - 1, 'y': coord.y})
+            else:  # right
+                next_coord = Coord({'x': coord.x + 1, 'y': coord.y})
 
             # the key is to check if the next square is safe or if it's the tail
             # the tail is a valid target because it will be empty on the next turn
@@ -161,37 +154,59 @@ def _is_game_over(state: GameState) -> bool:
     return not state.you
 
 
-def _simulate_move(state: GameState, snake: Snake, move_coord: Coord) -> GameState:
-    """Creates a new GameState object representing the board after a snake makes a move."""
-    # simulate the move
-    new_state_data = copy.deepcopy(state._state)
-    snake_to_move = next((s for s in new_state_data['board']['snakes'] if s['id'] == snake.id), None)
-    if not snake_to_move:
-        return GameState(new_state_data)
+def _create_child_state_dict(parent_state_dict: dict, snake_id: str, move_coord: dict) -> dict:
+    """Creates a new state dictionary for a child node."""
+    board = parent_state_dict['board']
 
-    snake_to_move['head'] = move_coord.to_dict()
-    snake_to_move['body'].insert(0, move_coord.to_dict())
+    # create new snake list by copying snake dictionaries. body lists are also copied
+    new_snakes = []
+    for s in board['snakes']:
+        new_snake = s.copy()
+        new_snake['body'] = list(s['body'])
+        new_snakes.append(new_snake)
+
+    snake_to_move = next((s for s in new_snakes if s['id'] == snake_id), None)
+    if not snake_to_move:
+        return parent_state_dict
+
+    # simulate the move
+    snake_to_move['head'] = move_coord
+    snake_to_move['body'].insert(0, move_coord)
+    snake_to_move['health'] -= 1
 
     # check for food
     ate_food = False
-    current_food = list(new_state_data['board']['food'])
-    for i, food_pos in enumerate(current_food):
-        if food_pos['x'] == move_coord.x and food_pos['y'] == move_coord.y:
+    new_food = list(board['food'])
+    for i, food_pos in enumerate(new_food):
+        if food_pos == move_coord:
             ate_food = True
             snake_to_move['health'] = 100
             snake_to_move['length'] += 1
-            new_state_data['board']['food'].pop(i)
+            new_food.pop(i)
             break
 
     if not ate_food:
         snake_to_move['body'].pop()
-        snake_to_move['health'] -= 1
 
-    return GameState(new_state_data)
+    you_snake = next((s for s in new_snakes if s['id'] == parent_state_dict['you']['id']), None)
+
+    return {
+        'game': parent_state_dict['game'],
+        'turn': parent_state_dict['turn'] + 1,
+        'board': {
+            'height': board['height'],
+            'width': board['width'],
+            'food': new_food,
+            'hazards': board['hazards'],
+            'snakes': new_snakes,
+        },
+        'you': you_snake
+    }
 
 
-def _solo_minimax(state: GameState, depth: int, alpha: float, beta: float, is_maximizing: bool) -> float:
+def _solo_minimax(state_dict: dict, depth: int, alpha: float, beta: float, is_maximizing: bool) -> float:
     """The recursive MiniMax function for a single player (solo mode)."""
+    state = GameState(state_dict)
     if depth == 0 or _is_game_over(state):
         return _get_score(state)
 
@@ -202,61 +217,65 @@ def _solo_minimax(state: GameState, depth: int, alpha: float, beta: float, is_ma
     if is_maximizing: # maximizing
         max_score = -float('inf')
         for move_coord in my_moves.values():
-            child_state = _simulate_move(state, state.you, move_coord)
-            score = _solo_minimax(child_state, depth - 1, alpha, beta, False)
+            child_dict = _create_child_state_dict(state_dict, state.my_id, move_coord.to_dict())
+            score = _solo_minimax(child_dict, depth - 1, alpha, beta, False)
             max_score = max(max_score, score)
             alpha = max(alpha, score)
-            if beta <= alpha: break # pruning
+            if beta <= alpha: break  # pruning
         return max_score
     else: # minimizing
         min_score = float('inf')
         for move_coord in my_moves.values():
-            child_state = _simulate_move(state, state.you, move_coord)
-            score = _solo_minimax(child_state, depth - 1, alpha, beta, True)
+            child_dict = _create_child_state_dict(state_dict, state.my_id, move_coord.to_dict())
+            score = _solo_minimax(child_dict, depth - 1, alpha, beta, True)
             min_score = min(min_score, score)
             beta = min(beta, score)
             if beta <= alpha: break # pruning
         return min_score
 
 
-def _multiplayer_minimax(state: GameState, depth: int, agent_index: int, alpha: float, beta: float) -> float:
+def _multiplayer_minimax(state_dict: dict, depth: int, snake_index: int, alpha: float, beta: float) -> float:
     """The recursive MiniMax function for multiple players."""
+    state = GameState(state_dict)
     if _is_game_over(state):
         return _get_score(state)
 
-    agents = [state.you] + state.opponents
-    if agent_index >= len(agents): # end of a turn cycle
-        return _multiplayer_minimax(state, depth - 1, 0, alpha, beta)
+    snakes = [state.you] + state.opponents
+    if snake_index >= len(snakes): # end of a turn cycle
+        return _multiplayer_minimax(state_dict, depth - 1, 0, alpha, beta)
 
     if depth == 0:
         return _get_score(state)
 
-    current_agent = agents[agent_index]
-    possible_moves = state._get_valid_moves(current_agent)
-    if not possible_moves: # if a snake has no moves, its turn is skipped
-        return _multiplayer_minimax(state, depth, agent_index + 1, alpha, beta)
+    current_snake = snakes[snake_index]
+    if not current_snake: # snake might have been eliminated in a hypothetical state
+        return _multiplayer_minimax(state_dict, depth, snake_index + 1, alpha, beta)
 
-    if agent_index == 0: # maximizing player (me)
+    possible_moves = state._get_valid_moves(current_snake)
+    if not possible_moves: # if a snake has no moves, its turn is skipped
+        return _multiplayer_minimax(state_dict, depth, snake_index + 1, alpha, beta)
+
+    if snake_index == 0: # maximizing player (me)
         max_score = -float('inf')
         for move_coord in possible_moves.values():
-            child_state = _simulate_move(state, current_agent, move_coord)
-            score = _multiplayer_minimax(child_state, depth, agent_index + 1, alpha, beta)
+            child_dict = _create_child_state_dict(state_dict, current_snake.id, move_coord.to_dict())
+            score = _multiplayer_minimax(child_dict, depth, snake_index + 1, alpha, beta)
             max_score = max(max_score, score)
             alpha = max(alpha, score)
             if beta <= alpha: break # pruning
         return max_score
-    else:  # minimizing player (opponent)
+    else: # minimizing player (opponent)
         min_score = float('inf')
         for move_coord in possible_moves.values():
-            child_state = _simulate_move(state, current_agent, move_coord)
-            score = _multiplayer_minimax(child_state, depth, agent_index + 1, alpha, beta)
+            child_dict = _create_child_state_dict(state_dict, current_snake.id, move_coord.to_dict())
+            score = _multiplayer_minimax(child_dict, depth, snake_index + 1, alpha, beta)
             min_score = min(min_score, score)
             beta = min(beta, score)
             if beta <= alpha: break # pruning
         return min_score
 
 
-def find_best_move(state: GameState, depth: int = 4) -> str:
+def find_best_move(state: GameState) -> str:
     """Finds the best move using the appropriate MiniMax algorithm based on game mode."""
     # the cache is only valid for the duration of a single turn's calculation
     global _flood_fill_cache
@@ -266,29 +285,42 @@ def find_best_move(state: GameState, depth: int = 4) -> str:
     if not my_moves: return "down" # default move
     if len(my_moves) == 1: return list(my_moves.keys())[0]
 
+    # dynamic depth based on number of opponents
+    num_opponents = len(state.opponents)
+    if num_opponents == 0: # no opponents
+        depth = 7
+    elif num_opponents == 1: # 1 opponent
+        depth = 4
+    else: # 2+ opponents
+        depth = 3
+
     # move ordering: evaluate moves based on available space to improve pruning
     sorted_moves = []
     for move_name, move_coord in my_moves.items():
-        temp_state = _simulate_move(state, state.you, move_coord)
-        move_score = _available_space(temp_state, move_coord)
+        temp_state_dict = _create_child_state_dict(state._state, state.my_id, move_coord.to_dict())
+        temp_state_obj = GameState(temp_state_dict)
+        move_score = _available_space(temp_state_obj, move_coord)
         sorted_moves.append({'name': move_name, 'coord': move_coord, 'score': move_score})
+
     # sort moves in descending order of their score (more space is better)
     sorted_moves.sort(key=lambda m: m['score'], reverse=True)
 
     best_score = -float('inf')
     best_move = sorted_moves[0]['name'] # default to the move with the most space
 
+    initial_state_dict = state._state
+
     # decide which MiniMax algorithm to use
-    is_multiplayer = len(state.opponents) > 0
+    is_multiplayer = num_opponents > 0
 
     # perform MiniMax search using the sorted move list
     for move in sorted_moves:
-        hypothetical_state = _simulate_move(state, state.you, move['coord'])
+        hypothetical_state_dict = _create_child_state_dict(initial_state_dict, state.my_id, move['coord'].to_dict())
 
         if is_multiplayer:
-            score = _multiplayer_minimax(hypothetical_state, depth - 1, 1, -float('inf'), float('inf'))
+            score = _multiplayer_minimax(hypothetical_state_dict, depth - 1, 1, -float('inf'), float('inf'))
         else:
-            score = _solo_minimax(hypothetical_state, depth - 1, -float('inf'), float('inf'), False)
+            score = _solo_minimax(hypothetical_state_dict, depth - 1, -float('inf'), float('inf'), False)
 
         if score > best_score:
             best_score = score
